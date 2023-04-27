@@ -82,7 +82,7 @@ if( !(Test-Path -Path $OutputPath) )
 }
 else # If there is already a path, ensure it isn't a file. If so, assume the parent directory.
 {
-    if( (Get-Item -Path $OutputPath) -is [FileInfo] )
+    if( (Get-Item -Path $OutputPath) -is [System.IO.FileInfo] )
     {
         $OutputPath = Split-Path -Path $OutputPath -Parent
         Write-Warning -Message "Path '$OutputPath' is a file using the parent directory"
@@ -94,12 +94,20 @@ foreach( $User in $UserList )
     # UserCertificate is a binary array (multi-valued) in AD. Each element represents a certificate.
     # UsersList can be any list of Names, SamAccountNames, or UserPrincipalNames.
     # Don't go crazy with the computer list. This could take awhile for 1000s of users.  
-    $UserInfo = Get-ADUser -Filter "Name -eq '$User' -or SamAccountName -eq '$User' -or userPrincipalName -eq '$User'" -Properties userCertificate
-    
+    try
+    {
+        $UserInfo = Get-ADUser -Filter "Name -eq '$User' -or SamAccountName -eq '$User' -or userPrincipalName -eq '$User'" -Properties userCertificate
+    }
+    catch
+    {
+        Write-Error -Message "Failed to locate user with name '$User' - $($PSItem.Exception.Message)"
+        throw $PSItem
+    }
+
     # If it is blank, we don't care. Skip it and notify. 
     if( $UserInfo.userCertificate.Count -gt 0 )
     {
-        Write-Host -Object "User $User has $($UserInfo.userCertificate.Count) issued certificates in AD - Certificate info exported to C:\temp\" -ForegroundColor Cyan
+        Write-Host -Object "User $User has $($UserInfo.userCertificate.Count) issued certificates in AD - Certificate info exported to $OutputPath\" -ForegroundColor Cyan
 
         # Stores the list of certificates we generate. 
         $ParsedCerts = [System.Collections.Generic.List[object]]::new()
@@ -123,14 +131,27 @@ foreach( $User in $UserList )
             $ParsedCert = $Cert | Select-Object -Property Subject, Issuer, NotBefore, NotAfter, @{Name = "TemplateName"; Expression = { $CertTemplateInfo[0] } }, @{ Name = "TemplateOID"; Expression = { $CertTemplateInfo[1] } }
 
             # Add the table with Subject (who gets the cert), Issuer (where it came from), NotBefore (Start), NotAfter (Expire), and the template information (TemplateName and OID). 
-            $ParsedCerts.Add( $ParsedCert )
+            if( $ParsedCert )
+            {
+                $ParsedCerts.Add( $ParsedCert )
+            }
         }
 
         # Dump to a csv. This should allow for quick viewing of lots of users. 
-        $ParsedCerts | ConvertTo-Csv -NoTypeInformation | Out-File -FilePath "C:\temp\$($UserInfo.SamAccountName)`_$(Get-Date -Format yyyyMMdd.HHmmss).csv"
+        if( $ParsedCerts.Count -gt 0 )
+        {
+            $ParsedCerts | ConvertTo-Csv -NoTypeInformation | Out-File -FilePath "$OutputPath\$($UserInfo.SamAccountName)`_$(Get-Date -Format yyyyMMdd.HHmmss).csv"
+        }
     }
     else
     {
-        Write-Warning -Message "User $User does not have any issued certificates in AD"
+        if( $UserInfo )
+        {
+            Write-Warning -Message "User $User does not have any issued certificates in AD"
+        }
+        else
+        {
+            Write-Warning -Message "Unable to locate a user that matches the name '$User'"
+        }
     }
 }
